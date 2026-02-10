@@ -1,0 +1,12 @@
+{
+  "name": "rivets",
+  "description": "Structured engineering workflow for Claude Code: research, plan, execute, and validate with autonomous sub-agents",
+  "version": "1.0.0",
+  "author": {
+    "name": "Lindley White"
+  },
+  "homepage": "https://github.com/lindleywhite/rivets",
+  "repository": "https://github.com/lindleywhite/rivets",
+  "license": "MIT",
+  "keywords": ["workflow", "planning", "execution", "research", "verification", "sub-agents", "epic", "rivets"]
+}
