@@ -9,7 +9,7 @@ Takes implementation work from research through validation with autonomous sub-a
 Provides a complete engineering pipeline:
 
 ```
-/research_codebase -> /create_plan -> /audit-plans -> /plan-to-epic -> /epic-executor -> /validate_plan
+/research_codebase -> /create_plan -> /audit-plans -> /plan-to-epic -> [/epic-executor OR /autonomous-executor] -> /validate_plan
 ```
 
 | Stage | What Happens |
@@ -18,7 +18,7 @@ Provides a complete engineering pipeline:
 | **Plan** | Interactive plan creation with YAML frontmatter and checkboxes |
 | **Audit** | Health check on active plans — flags stale, done, orphaned |
 | **Structure** | Converts plans into trackable work items with dependencies |
-| **Execute** | Autonomous task execution with fresh sub-agents per task, two-stage code review, 5-step verification gate |
+| **Execute** | Choose execution mode: supervised (epic-executor) or autonomous (autonomous-executor) |
 | **Validate** | Verifies implementation matches the plan |
 
 ## Installation
@@ -75,7 +75,8 @@ cp ~/.claude/plugins/rivets/templates/* ai/templates/
 - **brainstorming** — Explore requirements and design before implementation
 - **audit-plans** — Health check on `ai/current/` plans
 - **plan-to-epic** — Convert plans into structured work items
-- **epic-executor** — Autonomous task execution with verification gates
+- **epic-executor** — Supervised task execution with verification gates
+- **autonomous-executor** — Fully autonomous execution (runs for hours/days without supervision)
 
 ### Commands (invoke with `/command`)
 - `/research_codebase` — Deep codebase investigation
@@ -132,15 +133,46 @@ During execution, discovered work is filed as issues (beads or follow-up list), 
 ### Context Isolation
 Each task gets a fresh sub-agent to prevent context pollution between tasks.
 
+## Execution Modes
+
+Rivets provides two complementary execution modes:
+
+### Supervised Execution (/epic-executor)
+- **Interactive** - User monitors progress in real-time
+- **Single session** - Completes in one sitting
+- **Full control** - User can intervene anytime
+- **Best for**: Learning, exploration, rapid iteration, complex tasks with unknowns
+
+### Autonomous Execution (/autonomous-executor)
+- **Background operation** - Runs for hours/days without supervision
+- **Two-phase polling** - Cheap model checks every 5 minutes, expensive model only when work ready
+- **Cost optimized** - ~$2-5/hour vs ~$50-100/hour for continuous supervised
+- **Best for**: Known work, overnight execution, batch processing, long epics
+
+**Cost Comparison**:
+| Mode | Model Usage | Cost | Supervision |
+|------|-------------|------|-------------|
+| Supervised | Continuous Opus 4.6 | ~$50-100/hr | Full |
+| Autonomous | Sonnet 4 polling + Opus work | ~$2-5/hr | None |
+
+**Choose based on context**:
+- Unknown scope → Start supervised, switch to autonomous once approach clear
+- Long epic → Autonomous for sustained execution
+- Learning new codebase → Supervised for interaction
+- Batch of similar tasks → Autonomous for efficiency
+
 ## Decision Guide
 
 | Scenario | Workflow |
 |----------|----------|
-| Multi-day feature | Full pipeline: research -> plan -> audit -> epic -> execute -> validate |
+| Multi-day feature | Full pipeline: research -> plan -> audit -> epic -> **autonomous-executor** |
 | Known bug fix | Direct implementation + verification gate |
-| Unclear scope | brainstorming -> create_plan -> full pipeline |
+| Unclear scope | brainstorming -> create_plan -> full pipeline with **epic-executor** |
 | Quick change | Direct implementation, verification gate only |
-| Existing plan | audit-plans -> plan-to-epic -> epic-executor |
+| Existing plan | audit-plans -> plan-to-epic -> **epic-executor** (try first) |
+| Long epic (>10 tasks) | plan-to-epic -> **autonomous-executor** (overnight/weekend execution) |
+| Learning new codebase | Use **epic-executor** for visibility and interaction |
+| Batch similar tasks | **autonomous-executor** for cost efficiency |
 
 ## Companion Plugins
 
