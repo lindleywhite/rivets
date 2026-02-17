@@ -712,6 +712,8 @@ Wait for subagent to complete. Parse its output.
 
 ## Step 6: Two-Stage Review
 
+**Note**: The work agent performs this review directly using the quality criteria defined in `agents/epic-executor/verification-agent.md` as a reference. The verification-agent is not dispatched as a separate subagent; instead, its documented process serves as the quality standard that work agents must follow.
+
 ### Stage 1: Spec Compliance
 Check if implementation meets ALL acceptance criteria AND specialist requirements (if applicable):
 
@@ -1367,8 +1369,8 @@ The autonomous executor uses domain-specific specialist agents for targeted task
 
 | Agent | When Used | Purpose |
 |-------|-----------|---------|
-| **verification-agent** | After each implementation | Independent quality review and acceptance testing |
-| **learning-agent** | After epic completion (background) | Pattern extraction and knowledge synthesis |
+| **verification-agent** | Reference implementation only | Defines the quality review process that work agents follow (not dispatched as separate subagent) |
+| **learning-agent** | After epic completion (background) | Pattern extraction and knowledge synthesis (dispatched as separate subagent) |
 
 Each specialist brings:
 - Domain-specific checks and validation
