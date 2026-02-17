@@ -1332,7 +1332,7 @@ function launch_learning_synthesis() {
   echo "🧠 Launching learning-agent for knowledge synthesis..."
 
   # Launch in background (doesn't block completion)
-  nohup claude code --skill rivets:learning-synthesis <epic-id> \
+  nohup learning-agent <epic-id> \
     > /tmp/learning-agent-<epic-id>.log 2>&1 &
 
   LEARNING_PID=$!
