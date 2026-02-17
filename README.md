@@ -23,12 +23,12 @@ Provides a complete engineering pipeline:
 
 ## Installation
 
-### Via Plugin Marketplace (when available)
+### Via Plugin Marketplace
 
 ```bash
 # In Claude Code:
-/plugin marketplace add lindleywhite/rivets-marketplace
-/plugin install rivets@rivets-marketplace
+/plugin marketplace add lindleywhite/rivets
+/plugin install rivets
 ```
 
 ### Manual Installation
