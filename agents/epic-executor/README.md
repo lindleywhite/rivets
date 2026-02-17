@@ -17,8 +17,8 @@ Specialized agents for domain-specific task execution within the epic-executor w
 - **test-specialist**: Test implementation, TDD patterns, coverage
 
 ### Special Agents (Not Task Executors)
-- **verification-agent**: Independent code review and acceptance criteria validation (runs after each task)
-- **learning-agent**: Pattern extraction and knowledge synthesis (runs after epic completion in background)
+- **verification-agent**: Reference implementation for the quality review process that work agents follow (not dispatched as separate subagent; defines review standards in Step 6 of autonomous-executor workflow)
+- **learning-agent**: Pattern extraction and knowledge synthesis (runs after epic completion in background as separate subagent)
 
 ## Agent Structure
 
@@ -70,7 +70,7 @@ Epic-executor automatically selects the appropriate agent based on task analysis
 2. **Agent Selection**: Matches keywords/patterns to agent triggers
 3. **Preamble Construction**: Combines learning thread + agent instructions
 4. **Dispatch**: Launches specialized agent with focused context
-5. **Verification**: Results validated by verification-agent
+5. **Verification**: Work agent applies verification-agent quality standards
 6. **Knowledge Capture**: Agent contributes structured discoveries to epic thread
 
 ## Selection Logic
@@ -106,17 +106,17 @@ fi
 ```
 
 **Special agents** (verification-agent, learning-agent) are not part of this selection logic:
-- **verification-agent**: Automatically runs after each task implementation
-- **learning-agent**: Automatically runs after epic completion (background)
+- **verification-agent**: Reference implementation for quality review process (work agents follow its standards; not dispatched separately)
+- **learning-agent**: Automatically runs after epic completion (background as separate subagent)
 
 ## Verification Flow
 
-All implementation agents are followed by verification:
+All implementation agents are followed by quality review (work agent applies verification-agent standards):
 
 ```
 Implementation Agent (specialized)
   ↓
-Verification Agent (independent review)
+Quality Review (work agent follows verification-agent process)
   ↓
 [PASS] → Close task + capture learnings
 [FAIL] → Fix issues → Re-verify

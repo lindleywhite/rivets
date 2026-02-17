@@ -11,7 +11,7 @@
 |-------|------|-------|--------|--------------|
 | **migration-specialist** | migration-specialist.md | 550+ | ✅ Complete | Data safety, rollback testing, transaction management |
 | **security-specialist** | security-specialist.md | 700+ | ✅ Complete | OWASP Top 10, secret management, security testing |
-| **verification-agent** | verification-agent.md | 500+ | ✅ Complete | Two-stage review, 5-step verification gate, independent validation |
+| **verification-agent** | verification-agent.md | 500+ | ✅ Complete | Two-stage review, 5-step verification gate (reference implementation for work agent quality review process) |
 
 ### ✅ Tier 2: Domain Specialists
 
