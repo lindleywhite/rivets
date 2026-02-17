@@ -70,7 +70,7 @@ Epic-executor automatically selects the appropriate agent based on task analysis
 2. **Agent Selection**: Matches keywords/patterns to agent triggers
 3. **Preamble Construction**: Combines learning thread + agent instructions
 4. **Dispatch**: Launches specialized agent with focused context
-5. **Verification**: Results validated by verification-agent
+5. **Verification**: Work agent applies verification-agent quality standards
 6. **Knowledge Capture**: Agent contributes structured discoveries to epic thread
 
 ## Selection Logic
