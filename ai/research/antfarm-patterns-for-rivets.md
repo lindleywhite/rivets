@@ -101,7 +101,7 @@ touch /tmp/epic-executor-stop-<epic-id>
 - ✅ No human supervision needed
 
 **Implementation Files**:
-- Design: `~/labs/rivets/autonomous-epic-executor-design.md` ✅
+- Design: `ai/completed/autonomous-epic-executor-design.md` ✅
 - Prompts: Polling + Work templates included
 - Safety: Circuit breakers, rate limiting, manual override
 
