@@ -1270,7 +1270,10 @@ EOF
 )"
 
   # Cleanup
-  rm -f /tmp/autonomous-executor-*-<epic-id>.*
+  rm -f /tmp/autonomous-executor-base-<epic-id>.txt
+  rm -f /tmp/autonomous-executor-start-<epic-id>.txt
+  rm -f /tmp/autonomous-executor-status-<epic-id>.json
+  rm -f /tmp/autonomous-executor-stop-<epic-id>
 
   echo ""
   echo "Final Status: $EPIC_STATUS"
