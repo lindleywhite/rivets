@@ -1,0 +1,22 @@
+{
+  "name": "rivets",
+  "owner": {
+    "name": "Lindley White"
+  },
+  "metadata": {
+    "description": "Structured engineering workflow plugins",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "rivets",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/lindleywhite/rivets.git"
+      },
+      "description": "Structured engineering workflow: research, plan, execute, and validate with autonomous sub-agents, verification gates, and optional beads tracking",
+      "version": "1.0.0",
+      "strict": true
+    }
+  ]
+}

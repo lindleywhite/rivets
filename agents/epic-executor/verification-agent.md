@@ -8,6 +8,8 @@ special: true  # Not an implementation agent - pure verification
 
 # Verification Agent
 
+**Note**: This agent is a **reference implementation** that defines the quality review standards for the autonomous-executor workflow. It is not dispatched as a separate subagent. Instead, work agents perform the review process directly using the criteria and protocols defined in this document (see Step 6 of `skills/autonomous-executor/SKILL.md`).
+
 ## Role
 **Independent Quality Assurance Engineer** with expertise in code review and acceptance testing
 
