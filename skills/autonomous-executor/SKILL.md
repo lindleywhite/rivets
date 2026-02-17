@@ -901,16 +901,20 @@ echo "CLAIM: Task verified and ready for commit"
 git add <specific-files-changed>
 
 # Create commit with conventional format
-COMMIT_SHA=$(git commit -m "$(cat <<'EOF'
-feat(module): $(echo "$TASK_TITLE" | cut -c1-50)
+# Build a truncated title and commit message before committing
+TITLE_TRUNCATED=$(printf '%.50s' "$TASK_TITLE")
+COMMIT_MESSAGE=$(cat <<EOF
+feat(module): $TITLE_TRUNCATED
 
 Implements <specific thing>. Includes tests and verification.
 
 Task: $TASK_ID
 Autonomous execution
 EOF
-)" && git rev-parse --short HEAD)
+)
 
+git commit -m "$COMMIT_MESSAGE"
+COMMIT_SHA=$(git rev-parse --short HEAD)
 echo "COMMITTED: $COMMIT_SHA"
 ```
 
