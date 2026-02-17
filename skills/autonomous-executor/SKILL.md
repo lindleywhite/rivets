@@ -364,13 +364,16 @@ Run safety check every 10th poll to detect systemic failures.
    ```
 
 2. If failure rate >0.3 (30%):
-   - Add comment to epic: "Circuit Breaker Triggered - >30% tasks blocked"
-
-$FAILED_COUNT of $TOTAL tasks are blocked (>30% failure rate).
-Autonomous execution stopped. Manual intervention required.
-
-Failed tasks: bd list --parent <epic-id> --status blocked"
-
+   - Add comment to epic with a detailed message:
+     ```bash
+     bd comment add --parent <epic-id> --message "$(cat <<EOF
+     Circuit Breaker Triggered - >30% tasks blocked
+     $FAILED_COUNT of $TOTAL tasks are blocked (>30% failure rate).
+     Autonomous execution stopped. Manual intervention required.
+     Failed tasks: bd list --parent <epic-id> --status blocked
+     EOF
+     )"
+     ```
     # Update status and trigger stop
     jq '.status = "circuit_breaker_triggered"' \
        /tmp/autonomous-executor-status-<epic-id>.json > /tmp/tmp.$$.json && \
