@@ -806,7 +806,7 @@ Based on autonomous execution strategy:
 
 Research: `ai/research/2026-02-13_multi-agent-architecture.md`
 Design Documents:
-- `~/labs/rivets/epic-executor-progress-enhancements.md`
-- `~/labs/rivets/autonomous-epic-executor-design.md`
+- `ai/completed/epic-executor-progress-enhancements.md`
+- `ai/completed/autonomous-epic-executor-design.md`
 
 Inspired by Antfarm's multi-agent workflow system, adapted for Rivets' Beads-based tracking and verification-first philosophy.
