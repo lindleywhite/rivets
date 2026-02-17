@@ -329,8 +329,16 @@ Run maintenance every 10th poll to find and recover abandoned tasks.
 
 1. Find abandoned tasks using bash:
    ```bash
+   # Compute a portable UTC threshold for "35 minutes ago"
+   if threshold="$(date -u -d '35 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"; then
+     : # GNU date supports -d
+   else
+     # macOS/BSD date syntax
+     threshold="$(date -u -v-35M +%Y-%m-%dT%H:%M:%SZ)"
+   fi
+
    bd list --parent <epic-id> --status in_progress --json | \
-     jq --arg threshold "$(date -u -d '35 minutes ago' +%Y-%m-%dT%H:%M:%SZ)" \
+     jq --arg threshold "$threshold" \
      'map(select(.updated_at < $threshold)) | .[].id'
    ```
 
