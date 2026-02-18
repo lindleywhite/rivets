@@ -105,7 +105,10 @@ bd create --type=task \
     "description": "...",
     "design": "...",
     "notes": "From <plan-path>, section N",
-    "acceptance": "..."
+    "acceptance": "...",
+    "metadata": {
+      "predicted_files": ["src/path/to/file.ts", "tests/path/to/file.test.ts"]
+    }
   }'
 ```
 
@@ -119,6 +122,8 @@ Analyze file overlap to automatically infer dependencies:
 - Backend tasks before frontend tasks (usually)
 - Database migrations before code that uses them
 - Shared components before features that use them
+
+The `predicted_files` metadata is also used by autonomous-executor to verify file-disjointness when dispatching tasks in parallel. Tasks with overlapping predicted files will be serialized rather than run concurrently.
 
 **With beads:** `bd dep add <child-id> <parent-id>`
 **Without beads:** Note dependencies in markdown: `Dependencies: Task 1, Task 3`

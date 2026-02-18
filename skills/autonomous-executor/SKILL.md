@@ -141,7 +141,9 @@ High-Risk Tasks:
 Safety Features:
 ✓ Circuit breaker (stops if >30% tasks fail)
 ✓ Abandoned task recovery (auto-retry timeouts)
-✓ Rate limiting (max 1 task/10 minutes)
+✓ Parallel dispatch (up to 3 file-disjoint tasks)
+✓ Sequential commit gate (ordered commits after parallel work)
+✓ Phase boundary verification (full check at dependency layer transitions)
 ✓ Manual stop available anytime
 
 Stop Conditions:
@@ -190,7 +192,9 @@ cat > /tmp/autonomous-executor-status-<epic-id>.json <<EOF
   "total_tasks": $TOTAL_TASKS,
   "completed_tasks": 0,
   "failed_tasks": 0,
-  "current_task": null,
+  "current_tasks": [],
+  "max_parallel": 3,
+  "worker_count": 0,
   "poll_count": 0,
   "last_activity": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
@@ -223,6 +227,7 @@ The polling loop follows this pattern:
 ```bash
 POLL_COUNT=0
 CONSECUTIVE_NO_WORK=0
+MAX_PARALLEL=3
 
 while true; do
   POLL_COUNT=$((POLL_COUNT + 1))
@@ -248,7 +253,7 @@ while true; do
     check_circuit_breaker
   fi
 
-  # Spawn polling agent
+  # Spawn polling agent (returns READY:<id1>,<id2>,... or HEARTBEAT_OK)
   POLL_RESULT=$(spawn_polling_agent)
 
   if [[ "$POLL_RESULT" == "HEARTBEAT_OK" ]]; then
@@ -265,18 +270,103 @@ while true; do
     continue
   fi
 
-  if [[ "$POLL_RESULT" =~ ^SPAWNED:.+ ]]; then
+  if [[ "$POLL_RESULT" =~ ^READY:.+ ]]; then
     CONSECUTIVE_NO_WORK=0
-    TASK_ID=$(echo "$POLL_RESULT" | cut -d: -f2 | xargs)
-    echo "[$(date '+%H:%M:%S')] Work agent spawned for task: $TASK_ID"
+    TASK_IDS=$(echo "$POLL_RESULT" | sed 's/^READY: *//' | tr ',' ' ')
+    echo "[$(date '+%H:%M:%S')] Ready tasks: $TASK_IDS"
 
-    # Wait for work agent to complete
-    wait_for_work_agent "$TASK_ID"
+    # --- Claim all tasks atomically ---
+    CLAIMED_TASKS=()
+    for TASK_ID in $TASK_IDS; do
+      bd update "$TASK_ID" in_progress
+      STATUS=$(bd show "$TASK_ID" --json | jq -r '.status')
+      if [[ "$STATUS" == "in_progress" ]]; then
+        CLAIMED_TASKS+=("$TASK_ID")
+      fi
+    done
+
+    if [[ ${#CLAIMED_TASKS[@]} -eq 0 ]]; then
+      echo "[$(date '+%H:%M:%S')] All tasks claimed by other agents. Continuing..."
+      continue
+    fi
+
+    # --- Verify file-disjointness using predicted_files metadata ---
+    DISPATCHED_TASKS=()
+    ALL_FILES=()
+    for TASK_ID in "${CLAIMED_TASKS[@]}"; do
+      TASK_FILES=$(bd show "$TASK_ID" --json | jq -r '.metadata.predicted_files // [] | .[]')
+      OVERLAP=false
+      for f in $TASK_FILES; do
+        for existing in "${ALL_FILES[@]}"; do
+          if [[ "$f" == "$existing" ]]; then
+            OVERLAP=true
+            break 2
+          fi
+        done
+      done
+
+      if [[ "$OVERLAP" == true ]]; then
+        echo "[$(date '+%H:%M:%S')] File overlap detected for $TASK_ID — deferring"
+        bd update "$TASK_ID" open  # Release claim
+      else
+        DISPATCHED_TASKS+=("$TASK_ID")
+        for f in $TASK_FILES; do
+          ALL_FILES+=("$f")
+        done
+      fi
+    done
+
+    # Update status with current parallel state
+    WORKER_COUNT=${#DISPATCHED_TASKS[@]}
+    jq --argjson tasks "$(printf '%s\n' "${DISPATCHED_TASKS[@]}" | jq -R . | jq -s .)" \
+       --arg count "$WORKER_COUNT" \
+       '.current_tasks = $tasks | .worker_count = ($count | tonumber) | .status = "working"' \
+       /tmp/autonomous-executor-status-<epic-id>.json > /tmp/tmp.$$.json && \
+       mv /tmp/tmp.$$.json /tmp/autonomous-executor-status-<epic-id>.json
+
+    echo "[$(date '+%H:%M:%S')] Dispatching $WORKER_COUNT parallel workers..."
+
+    # --- Spawn work agents in parallel (one per claimed task) ---
+    WORKER_PIDS=()
+    for TASK_ID in "${DISPATCHED_TASKS[@]}"; do
+      spawn_work_agent "$TASK_ID" &
+      WORKER_PIDS+=($!)
+    done
+
+    # Wait for ALL workers to complete
+    for PID in "${WORKER_PIDS[@]}"; do
+      wait $PID
+    done
+
+    echo "[$(date '+%H:%M:%S')] All $WORKER_COUNT workers complete."
+
+    # --- Sequential Commit Gate ---
+    # Workers leave changes staged but uncommitted. Commit each sequentially.
+    for TASK_ID in "${DISPATCHED_TASKS[@]}"; do
+      WORKER_FILES=$(cat /tmp/worker-files-${TASK_ID}.txt 2>/dev/null)
+      if [[ -n "$WORKER_FILES" ]]; then
+        git add $WORKER_FILES && \
+        git commit -m "feat: $TASK_ID — $(bd show $TASK_ID --json | jq -r '.title')"
+        if [[ $? -ne 0 ]]; then
+          echo "Commit failed for $TASK_ID — re-running verification"
+          rerun_verification "$TASK_ID"
+        fi
+      fi
+    done
+
+    # Batch verification after all commits
+    echo "[$(date '+%H:%M:%S')] Running batch verification..."
+    npm test && npm run build && npm run lint && npm run typecheck
+    if [[ $? -ne 0 ]]; then
+      echo "Batch verification failed after parallel commit. Investigating..."
+      bd comments add <epic-id> "⚠️ Batch verification failed after parallel commit of: ${DISPATCHED_TASKS[*]}"
+    fi
 
     # Update status
     COMPLETED=$(bd list --parent <epic-id> --status closed --json | jq 'length')
     jq --arg completed "$COMPLETED" \
-       '.completed_tasks = ($completed | tonumber) | .current_task = null' \
+       --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+       '.completed_tasks = ($completed | tonumber) | .current_tasks = [] | .worker_count = 0 | .last_activity = $ts' \
        /tmp/autonomous-executor-status-<epic-id>.json > /tmp/tmp.$$.json && \
        mv /tmp/tmp.$$.json /tmp/autonomous-executor-status-<epic-id>.json
 
@@ -286,9 +376,7 @@ while true; do
       break
     fi
 
-    # Rate limiting: enforce minimum 10 minutes between tasks
-    echo "[$(date '+%H:%M:%S')] Rate limiting: waiting 10 minutes before next task..."
-    sleep 600
+    # No rate limiting needed — parallel dispatch replaces the 10-minute wait
   fi
 done
 
@@ -406,6 +494,49 @@ bd list --parent <epic-id> --status open,in_progress,blocked --json | jq 'length
 
 If the count is 0, the epic is complete. Initiate shutdown.
 
+### 1.6 Phase Boundary Check
+
+After a batch of parallel tasks completes, detect dependency layer transitions and run full verification at boundaries. This ensures that the foundation for the next wave of tasks is solid.
+
+**Logic**:
+
+1. Check if a dependency layer just completed (new tasks became ready that weren't before):
+   ```bash
+   # Count newly unblocked tasks
+   NEW_READY=$(bd ready --parent <epic-id> --json | jq 'length')
+   ```
+
+2. If new tasks became ready (dependency layer transition), run full verification:
+   ```bash
+   echo "[$(date '+%H:%M:%S')] Phase boundary detected — running full verification..."
+   npm test && npm run build && npm run lint && npm run typecheck
+   BOUNDARY_EXIT=$?
+   ```
+
+3. If verification fails at boundary: hard stop, add comment to epic:
+   ```bash
+   if [[ $BOUNDARY_EXIT -ne 0 ]]; then
+     bd comments add <epic-id> "🚫 **Phase Boundary Verification Failed**
+
+   A dependency layer just completed but full verification failed.
+   This means the foundation for the next wave of tasks is broken.
+
+   Hard stop — manual intervention required.
+   Last passing boundary: $(cat /tmp/epic-boundary-sha-<epic-id>.txt 2>/dev/null || echo 'none')
+   Current HEAD: $(git rev-parse HEAD)"
+
+     touch /tmp/autonomous-executor-stop-<epic-id>
+   fi
+   ```
+
+4. Record boundary SHA on success:
+   ```bash
+   git rev-parse HEAD > /tmp/epic-boundary-sha-<epic-id>.txt
+   echo "[$(date '+%H:%M:%S')] Phase boundary verified. SHA: $(git rev-parse --short HEAD)"
+   ```
+
+**Integration**: The phase boundary check runs inside the polling loop, after the sequential commit gate and batch verification, but before checking for epic completion.
+
 ---
 
 ## Phase 2: Polling Agent (Cheap Model)
@@ -422,7 +553,7 @@ Use the Task tool to spawn a polling agent with these parameters:
 
 Parse the polling agent's response:
 - If response contains "HEARTBEAT_OK": Return "HEARTBEAT_OK" (no work)
-- If response contains "SPAWNED:": Extract and return the task ID
+- If response contains "READY:": Extract and return the task ID list
 - Otherwise: Handle as error
 
 **Conceptual bash (shows the logic)**:
@@ -442,8 +573,8 @@ function spawn_polling_agent() {
   # Parse result
   if [[ "$RESULT" == *"HEARTBEAT_OK"* ]]; then
     echo "HEARTBEAT_OK"
-  elif [[ "$RESULT" == *"SPAWNED:"* ]]; then
-    echo "$RESULT"
+  elif [[ "$RESULT" == *"READY:"* ]]; then
+    echo "$RESULT"  # e.g. "READY: bd-task-456, bd-task-457"
   else
     echo "ERROR: Unexpected polling result"
   fi
@@ -472,36 +603,33 @@ bd ready --parent <epic-id> --json
 - Exit immediately
 
 **Case B: Output contains tasks (non-empty array)**
-- Extract first ready task from JSON
-- You MUST spawn a work agent using `sessions_spawn` tool
+- Return ALL ready task IDs (up to MAX_PARALLEL, default 3)
+- Do NOT spawn work agents — the coordinator handles parallel dispatch
 - Do NOT attempt to do the work yourself
 
-## Step 3: Spawn Work Agent (if work found)
+## Step 3: Report Ready Tasks (if work found)
 
-Call `sessions_spawn` with these exact parameters:
-- agentId: "autonomous-executor-worker-<epic-id>"
-- model: "claude-opus-4-6"
-- task: The COMPLETE work prompt below + the task JSON you received
+Extract task IDs from the JSON array (up to MAX_PARALLEL=3):
 
-**Work Prompt to Include**:
----START WORK PROMPT---
-{WORK_PROMPT_TEMPLATE}
----END WORK PROMPT---
+```bash
+TASK_IDS=$(echo "$READY_JSON" | jq -r '.[0:3] | .[].id' | tr '\n' ', ' | sed 's/,$//')
+```
 
-After the work prompt, add:
----START CLAIMED TASK---
-{JSON output from bd ready command}
----END CLAIMED TASK---
+Reply: "READY: <task-id-1>, <task-id-2>, ..."
 
-Reply: "SPAWNED: <task-id>"
+The coordinator (Phase 1 polling loop) will handle:
+- Claiming tasks atomically
+- Verifying file-disjointness via `predicted_files` metadata
+- Spawning parallel work agents
+- Sequential commit gate
 
 ## Critical Rules
 
 1. Keep this session SHORT (<30 seconds)
 2. You are the cheap checker, not the worker
-3. Only spawn ONE work agent per poll
+3. Return ready task list — do NOT spawn work agents
 4. Do NOT read files, do NOT analyze code
-5. Your ONLY job: check bd ready → spawn if work exists
+5. Your ONLY job: check bd ready → report what's ready
 
 ## Examples
 
@@ -512,14 +640,21 @@ $ bd ready --parent bd-epic-123 --json
 ```
 Your reply: "HEARTBEAT_OK - No ready tasks"
 
-**Example 2: Work found**
+**Example 2: Single task ready**
 ```bash
 $ bd ready --parent bd-epic-123 --json
 [{"id":"bd-task-456","title":"Create auth endpoint",...}]
 ```
-Your actions:
-1. Call sessions_spawn with work prompt + task JSON
-2. Reply: "SPAWNED: bd-task-456"
+Your reply: "READY: bd-task-456"
+
+**Example 3: Multiple tasks ready**
+```bash
+$ bd ready --parent bd-epic-123 --json
+[{"id":"bd-task-456","title":"Create auth endpoint",...},
+ {"id":"bd-task-457","title":"Add user model",...},
+ {"id":"bd-task-458","title":"Create test fixtures",...}]
+```
+Your reply: "READY: bd-task-456, bd-task-457, bd-task-458"
 ```
 
 ---
@@ -742,22 +877,47 @@ for criterion in $TASK_ACCEPTANCE; do
 done
 
 if [[ "$SPEC_PASS" == false ]]; then
-  # Store feedback and retry
+  # Store feedback and retry with escalating strategy
   bd update "$TASK_ID" --metadata review_feedback="$SPEC_ISSUES"
 
-  # Dispatch fix subagent (max 2 attempts)
   RETRY_COUNT=$(echo "$FULL_TASK" | jq -r '.metadata.spec_retry_count // 0')
   NEW_RETRY=$((RETRY_COUNT + 1))
-
-  if [[ $NEW_RETRY -gt 2 ]]; then
-    bd update "$TASK_ID" blocked
-    bd comments add <epic-id> "🚫 Task $TASK_ID failed spec review after 2 retries. Marked blocked."
-    exit 1
-  fi
-
   bd update "$TASK_ID" --metadata spec_retry_count="$NEW_RETRY"
-  # Re-dispatch implementation subagent (it will see review_feedback)
-  # ... (loop back to Step 4)
+
+  # Escalating retry strategy (backported from epic-executor):
+  #
+  # | Failure # | Action                                                    |
+  # |-----------|-----------------------------------------------------------|
+  # | 1st       | Re-dispatch with review feedback                          |
+  # | 2nd       | Competing hypotheses on why spec isn't being met          |
+  # | 3rd       | Mark blocked                                              |
+
+  case $NEW_RETRY in
+    1)
+      echo "Spec failure #1: Re-dispatching with review feedback..."
+      # Re-dispatch implementation subagent (it will see review_feedback)
+      # ... (loop back to Step 5)
+      ;;
+    2)
+      echo "Spec failure #2: Spawning competing hypothesis agents..."
+      # Spawn 3 competing hypothesis debug agents in parallel.
+      # Each investigates a different root cause for why the spec isn't met.
+      # Agent 1: Check if acceptance criteria are ambiguous/contradictory
+      # Agent 2: Check if the implementation approach is fundamentally wrong
+      # Agent 3: Check if there's a missing dependency or prerequisite
+      # Score findings by evidence strength, apply best fix.
+      # ... (spawn 3 agents, pick best, re-dispatch)
+      ;;
+    *)
+      echo "Spec failure #3: Marking task blocked."
+      bd update "$TASK_ID" blocked
+      bd comments add <epic-id> "🚫 Task $TASK_ID failed spec review after escalating retries (including competing hypotheses). Marked blocked.
+
+Spec issues:
+$SPEC_ISSUES"
+      exit 1
+      ;;
+  esac
 fi
 ```
 
@@ -885,19 +1045,48 @@ if [[ $VERIFY_EXIT -eq 0 ]]; then
 else
   echo "VERIFY: Verification failed ✗"
 
-  # Retry logic (max 3 total attempts)
+  # Escalating retry strategy (backported from epic-executor):
+  #
+  # | Failure # | Action                                                                  |
+  # |-----------|-------------------------------------------------------------------------|
+  # | 1st       | Analyze error, re-dispatch implementation subagent with error context   |
+  # | 2nd       | Spawn 3 competing hypothesis debug agents in parallel                   |
+  # | 3rd       | Mark task blocked, add detailed comment to epic                         |
+
   VERIFY_RETRY=$(echo "$FULL_TASK" | jq -r '.metadata.verify_retry_count // 0')
   NEW_VERIFY=$((VERIFY_RETRY + 1))
-
-  if [[ $NEW_VERIFY -gt 3 ]]; then
-    bd update "$TASK_ID" blocked
-    bd comments add <epic-id> "🚫 Task $TASK_ID failed verification after 3 attempts. Marked blocked."
-    exit 1
-  fi
-
   bd update "$TASK_ID" --metadata verify_retry_count="$NEW_VERIFY"
-  # Fix and retry from Step 4
-  exit 1
+
+  case $NEW_VERIFY in
+    1)
+      echo "Verification failure #1: Analyzing error and re-dispatching..."
+      # Parse VERIFY_OUTPUT to extract error context
+      # Re-dispatch implementation subagent with error output attached
+      # ... (loop back to Step 5 with error context)
+      ;;
+    2)
+      echo "Verification failure #2: Spawning competing hypothesis debug agents..."
+      # Spawn 3 competing hypothesis debug agents in parallel.
+      # Each investigates a different potential root cause:
+      # Agent 1: The implementation has a logic error (analyze test failures)
+      # Agent 2: The implementation breaks an existing contract (analyze build errors)
+      # Agent 3: The implementation has an environment/dependency issue (analyze lint/type errors)
+      # Each agent returns: { hypothesis, evidence_strength (1-10), proposed_fix }
+      # Apply the fix from the highest-scoring hypothesis.
+      # ... (spawn 3 agents, score, apply best fix, re-verify)
+      ;;
+    *)
+      echo "Verification failure #3: Marking task blocked."
+      bd update "$TASK_ID" blocked
+      bd comments add <epic-id> "🚫 Task $TASK_ID failed verification after escalating retries (including competing hypotheses). Marked blocked.
+
+Last verification output:
+\`\`\`
+$(echo "$VERIFY_OUTPUT" | tail -50)
+\`\`\`"
+      exit 1
+      ;;
+  esac
 fi
 
 # 5. CLAIM
@@ -1169,7 +1358,29 @@ EOF
 )"
 ```
 
-## Step 10: Close Task & Update Status
+## Step 10: Close Task, Update Plan & Status
+
+### Update Source Plan
+
+If the epic description/notes reference a source plan path, update the plan's checkboxes to reflect completion:
+
+```bash
+# Extract source plan path from epic
+PLAN_PATH=$(bd show <epic-id> --json | jq -r '.description + "\n" + (.notes // "")' | grep -oE 'ai/current/[^[:space:]]+\.md' | head -1)
+
+if [[ -n "$PLAN_PATH" ]] && [[ -f "$PLAN_PATH" ]]; then
+  # Find the matching checkbox for this task (by title match) and mark complete
+  # Uses sed to update the first matching unchecked checkbox with this task's title
+  ESCAPED_TITLE=$(printf '%s\n' "$TASK_TITLE" | sed 's/[[\.*^$()+?{|]/\\&/g')
+  sed -i '' "0,/- \[ \].*${ESCAPED_TITLE}/s/- \[ \]/- [x]/" "$PLAN_PATH"
+
+  echo "Updated source plan: $PLAN_PATH"
+fi
+```
+
+This keeps the plan as living documentation during autonomous execution. Each completed task checks off its corresponding item in the source plan.
+
+### Close Task
 
 ```bash
 # Close task
@@ -1445,19 +1656,28 @@ Stops execution if >30% of tasks fail (blocked status)
 ### 2. Abandoned Task Recovery
 Automatically detects and recovers tasks stuck in `in_progress` for >35 minutes
 
-### 3. Rate Limiting
-Maximum 1 task per 10 minutes to prevent resource exhaustion
+### 3. Parallel Dispatch with File-Disjointness
+Up to 3 tasks dispatched in parallel when `predicted_files` metadata confirms no file overlap. Sequential commit gate ensures ordered, conflict-free commits.
 
-### 4. Manual Override
+### 4. Phase Boundary Verification
+Full verification suite (test + build + lint + typecheck) runs at dependency layer transitions, ensuring foundations are solid before the next wave of tasks.
+
+### 5. Competing Hypotheses (Escalating Retries)
+When tasks fail verification or spec review 2+ times, 3 competing hypothesis debug agents are spawned in parallel to investigate different root causes. Highest-evidence fix is applied.
+
+### 6. Living Plan Updates
+Source plan checkboxes are updated as tasks complete, keeping the plan as living documentation.
+
+### 7. Manual Override
 Multiple ways to stop:
 - Stop file: `touch /tmp/autonomous-executor-stop-<epic-id>`
 - Comment: `bd comments add <epic-id> "STOP_REQUESTED"`
 - Close epic: `bd close <epic-id>`
 
-### 5. Separate Retry Tracking
+### 8. Separate Retry Tracking with Escalation
 - `abandon_count`: For timeouts/crashes (max 5)
-- `spec_retry_count`: For spec review failures (max 2)
-- `verify_retry_count`: For verification failures (max 3)
+- `spec_retry_count`: For spec review failures (1st: re-dispatch, 2nd: competing hypotheses, 3rd: blocked)
+- `verify_retry_count`: For verification failures (1st: re-dispatch with error context, 2nd: competing hypotheses, 3rd: blocked)
 
 ---
 
@@ -1469,6 +1689,10 @@ Multiple ways to stop:
 | **Duration** | Single session | Hours/days |
 | **Cost** | $50-100/hour | $2-5/hour |
 | **Supervision** | Full | None |
+| **Parallelism** | Sequential | Up to 3 parallel (file-disjoint) |
+| **Retry strategy** | Competing hypotheses | Competing hypotheses (backported) |
+| **Phase boundaries** | Full verification | Full verification (backported) |
+| **Plan updates** | Living plan checkboxes | Living plan checkboxes (backported) |
 | **Use case** | Interactive work | Long-running batch |
 | **Stop** | User stops | Auto-complete or manual |
 
