@@ -1,0 +1,44 @@
+name: Update Marketplace
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  update-marketplace:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Update marketplace repo
+        env:
+          GH_TOKEN: ${{ secrets.MARKETPLACE_PAT }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Fetch current marketplace.json
+          RESPONSE=$(gh api repos/lindleywhite/rivets-marketplace/contents/.claude-plugin/marketplace.json)
+          SHA=$(echo "$RESPONSE" | jq -r '.sha')
+          CONTENT=$(echo "$RESPONSE" | jq -r '.content' | base64 -d)
+
+          # Update both version fields
+          UPDATED=$(echo "$CONTENT" | jq \
+            --arg v "$VERSION" \
+            '.metadata.version = $v | .plugins[0].version = $v')
+
+          # Push updated file
+          ENCODED=$(echo "$UPDATED" | base64 -w 0)
+          gh api repos/lindleywhite/rivets-marketplace/contents/.claude-plugin/marketplace.json \
+            -X PUT \
+            -f message="chore: update rivets to v${VERSION}" \
+            -f content="$ENCODED" \
+            -f sha="$SHA" \
+            -f branch="main"
+
+          echo "Updated marketplace to v${VERSION}"
